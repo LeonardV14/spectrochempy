@@ -3,10 +3,78 @@ import sklearn
 from sklearn.decomposition import PCA
 import numpy as np
 
+import warnings
+
+from math import log, sqrt
+import numbers
+
+import numpy as np
+from scipy import linalg
+from scipy.special import gammaln
+from scipy.sparse import issparse
+from scipy.sparse.linalg import svds
+
+
 from spectrochempy.core.dataset.nddataset import NDDataset
 
 # from spectrochempy.core.dataset.nddataset import NDDataset
 # from spectrochempy.analysis import pca
+
+def stable_cumsum(arr, axis=None, rtol=1e-05, atol=1e-08):
+        out = np.cumsum(arr, axis=axis, dtype=np.float64)
+        expected = np.sum(arr, axis=axis, dtype=np.float64)
+        if not np.all(
+            np.isclose(
+                out.take(-1, axis=axis), expected, rtol=rtol, atol=atol, equal_nan=True
+        )
+        ):
+            warnings.warn(
+            "cumsum was found to be unstable: "
+            "its last element does not correspond to sum",
+                RuntimeWarning,
+        )
+        return out
+
+    
+def svd_flip(u, v, u_based_decision=True):
+        """
+    u : ndarray
+        u and v are the output of `linalg.svd` or
+        :func:`~sklearn.utils.extmath.randomized_svd`, with matching inner
+        dimensions so one can compute `np.dot(u * s, v)`.
+    v : ndarray
+        u and v are the output of `linalg.svd` or
+        :func:`~sklearn.utils.extmath.randomized_svd`, with matching inner
+        dimensions so one can compute `np.dot(u * s, v)`.
+        The input v should really be called vt to be consistent with scipy's
+        output.
+    u_based_decision : bool, default=True
+        If True, use the columns of u as the basis for sign flipping.
+        Otherwise, use the rows of v. The choice of which variable to base the
+        decision on is generally algorithm dependent."""
+        if u_based_decision:
+            # columns of u, rows of v
+            max_abs_cols = np.argmax(np.abs(u), axis=0)
+            signs = np.sign(u[max_abs_cols, range(u.shape[1])])
+            u *= signs
+            v *= signs[:, np.newaxis]
+        else:
+        # rows of v, columns of u
+            max_abs_rows = np.argmax(np.abs(v), axis=1)
+            signs = np.sign(v[range(v.shape[0]), max_abs_rows])
+            u *= signs
+            v *= signs[:, np.newaxis]
+        return u
+    
+def _infer_dimension(spectrum, n_samples):
+    """Infers the dimension of a dataset with a given spectrum.
+    The returned value will be in [1, n_features - 1].
+    """
+    ll = np.empty_like(spectrum)
+    ll[0] = -np.inf  # we don't want to return n_components = 0
+    for rank in range(1, spectrum.shape[0]):
+        ll[rank] = _assess_dimension(spectrum, rank, n_samples)
+    return ll.argmax()
 
 class skpca(PCA):
     def __init__(self, n_components=None, *, copy=True, whiten=False, svd_solver='auto', tol=0.0, iterated_power='auto', random_state=None) -> None:
@@ -31,6 +99,8 @@ class skpca(PCA):
         output.data = super().score(X, y)
         #les dimensions de score sont pc1 et pc2 ?
         return output
+    
+    
 
     # Pour récupérer le loading, il faut calculer: loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
     def _fit_full(self, X, n_components):
